@@ -1,0 +1,30 @@
+{
+
+  "manifest_version": 2,
+  "name": "Container Header",
+  "version": "1.0",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{c1e81c5e-e7de-4243-8453-c2c1a3bcaec9}",
+      "strict_min_version": "70.0"
+    }
+  },
+  
+  "description": "Adds an X-Container-ID header with the name of the current container",
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "permissions": [
+    "cookies",
+    "storage",
+    "webRequest",
+    "webRequestBlocking",
+    "contextualIdentities",
+    "<all_urls>",
+    "tabs"
+  ]
+
+}
