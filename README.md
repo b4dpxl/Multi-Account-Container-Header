@@ -25,3 +25,5 @@ The valid colours are:
 - orange
 - gray
 - yellow
+
+If there is no mapping or match, it won't highight. But it will add a comment with the container name either way.
