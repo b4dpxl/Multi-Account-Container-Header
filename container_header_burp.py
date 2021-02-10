@@ -18,12 +18,19 @@ from javax import swing
 from java.io import File
 from java.util import List, ArrayList
 
+from java.awt import BorderLayout
+
 import json
 import os
 import re
+import traceback
 
 NAME ="Firefox Multi-Container Highlighting"
 SHORTNAME = "FMCH"
+SETTING_REMOVE_HEADER = "SETTING_REMOVE_HEADER"
+SETTING_ENABLED = "SETTING_ENABLED"
+SETTING_MAPPINGS = "SETTING_MAPPINGS"
+
 
 def fix_exception(func):
     def wrapper(self, *args, **kwargs):
@@ -31,7 +38,7 @@ def fix_exception(func):
             return func(self, *args, **kwargs)
         except Exception as e:
             print("\n\n*** PYTHON EXCEPTION")
-            print(e)
+            print(traceback.format_exc(e))
             print("*** END\n")
             raise
     return wrapper
@@ -44,8 +51,7 @@ def debug(msg):
 
 class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensionStateListener):
 
-    folder = os.path.expanduser("~/.FMCH")
-    file = os.path.join(folder, "config.json")
+    remove_header = False
 
     def registerExtenderCallbacks( self, callbacks):
 
@@ -63,7 +69,6 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
         # Colors for different browsers
 
         self.callbacks.setExtensionName(NAME)
-        self.enabled = True
 
         callbacks.registerProxyListener(self)
         callbacks.registerContextMenuFactory(self)
@@ -72,35 +77,32 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
         print("{} loaded".format(NAME))
 
     def loadConfig(self):
+        s_map = self.callbacks.loadExtensionSetting(SETTING_MAPPINGS)
         try:
-            if not os.path.exists(self.folder):
-                os.mkdir(self.folder)
-
-            if not os.path.exists(self.file):
-                with open(self.file, 'w') as f:
-
-                    sample = {
-                        "valid_colours": self.valid_colours,
-                        "mappings": {
-                            "sample_container_name_1": "red",
-                            "sample_container_name_2": "green"
-                        }
-                    }
-
-                    print("Creating sample config file")
-                    f.write(json.dumps(sample, indent=4))
-
-            with open(self.file, 'r') as f:
-                config = json.load(f)
-                self.colour_mappings = config.get("mappings")
-                debug("Mappings: " + json.dumps(self.colour_mappings, indent=4))
+            if s_map:
+                self.colour_mappings = json.loads(s_map)
 
         except Exception as e:
             print("Error: Unable to load config", e)
 
+        if not self.colour_mappings:
+            self.colour_mappings = {
+                "sample_container_name_1": "red",
+                "sample_container_name_2": "green"
+            }
+
+        s_en = self.callbacks.loadExtensionSetting(SETTING_ENABLED)
+        self.enabled = False if s_en is None else s_en.lower() == 'true'  # why doesn't bool() work?
+        
+        s_rh = self.callbacks.loadExtensionSetting(SETTING_REMOVE_HEADER)
+        self.remove_header = False if s_rh is None else s_rh.lower() == 'true'  # why doesn't bool() work?
+            
+
     def extensionUnloaded(self):
         debug("Unloading {}".format(NAME))
+        self.saveSettings(None)
 
+    @fix_exception
     def processProxyMessage(self, messageIsRequest, message):
         if not self.enabled:
             return
@@ -109,10 +111,12 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
         
         highlight_colour = None
         new_comment = None
-        headers = self.helpers.analyzeRequest(message.getMessageInfo()).getHeaders()[1:]
+        request = self.helpers.analyzeRequest(message.getMessageInfo())
+        headers = request.getHeaders()
+        for header in headers:
+            if header.startswith("X-CONTAINER-ID:"):
 
-        for name, value in [(x.strip(), y.strip()) for x,y in [x.split(":", 1) for x in headers[1:] if ":" in x]]:
-            if name == "X-CONTAINER-ID":
+                value = header.split(':', 1)[1].strip()
 
                 if value in self.colour_mappings:
                     col = self.colour_mappings.get(value, '').lower()
@@ -128,14 +132,28 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
                     debug("Unmapped container ID: {}".format(value))
 
                 new_comment = "Container: {}".format(value)
+                
+                if self.remove_header:
+                    headers.remove(header)
+                
+                break
 
         if highlight_colour:
             message.getMessageInfo().setHighlight(highlight_colour)
+
         if new_comment:
             comment = message.getMessageInfo().getComment()
             if comment:
                 new_comment = "{} - {}".format(comment, new_comment)
             message.getMessageInfo().setComment(new_comment)
+
+        if self.remove_header:
+            debug("Removing header")
+            message.getMessageInfo().setRequest(self.helpers.buildHttpMessage(
+                headers, 
+                message.getMessageInfo().request[request.getBodyOffset():]
+            ))
+            
 
     @fix_exception
     def createMenuItems(self, invocation):
@@ -145,21 +163,54 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
 
         menu = ArrayList()
         subMenu = swing.JMenu("Highlight Firefox Containers")
-        subMenu.add(swing.JMenuItem("Disable" if self.enabled else "Enable", actionPerformed=self.toggle))
-        subMenu.add(swing.JMenuItem("Edit Config", actionPerformed=self.editConfig))
-        subMenu.add(swing.JMenuItem("Reload Config", actionPerformed=self.reloadConfig))
+        self.enable_menu = swing.JCheckBoxMenuItem("Enabled", self.enabled, actionPerformed=self.saveSettings)
+        subMenu.add(self.enable_menu)
+        self.remove_header_menu = swing.JCheckBoxMenuItem("Remove header", self.remove_header, actionPerformed=self.saveSettings)
+        subMenu.add(self.remove_header_menu)
+
+        subMenu.add(swing.JMenuItem("Edit Mappings", actionPerformed=self.editMappings))
         menu.add(subMenu)
         return menu
 
-    def reloadConfig(self, event):
-        self.loadConfig()
+    @fix_exception
+    def editMappings(self, event, text=None):
 
-    def editConfig(self, event):
-        try:
-            Desktop.getDesktop().open(File(self.file))
-        except Exception as e:
-            print("Error: Unable to launch desktop API", e)
+        if not text:
+            text = json.dumps(self.colour_mappings, indent=2)
 
-    def toggle(self, event):
-        self.enabled = not self.enabled
+        msg = swing.JTextArea(text, 10, 80)
+        msg.setLineWrap(True)
+        msg.setWrapStyleWord(True)
+        scroll = swing.JScrollPane(msg)
+
+        resp = swing.JOptionPane.showConfirmDialog(
+            None, 
+            scroll, 
+            "Mappings",
+            swing.JOptionPane.OK_CANCEL_OPTION,
+            swing.JOptionPane.PLAIN_MESSAGE
+        )
+        if resp == 0:
+            try:
+                self.colour_mappings = json.loads(msg.getText())
+                self.callbacks.saveExtensionSetting(SETTING_MAPPINGS, json.dumps(self.colour_mappings))
+                swing.JOptionPane.showMessageDialog(None, "Mappings saved")
+            except Exception as e:
+                swing.JOptionPane.showMessageDialog(None, "Unable to parse JSON.\n\n{}".format(e))
+                self.editMappings(None, msg.getText())
+
+
+    @fix_exception
+    def saveSettings(self, event):
+        debug("Saving settings")
+        if event:
+            # triggered by right-clicking
+            debug("Updating settings")
+            self.enabled = self.enable_menu.isSelected()
+            self.remove_header = self.remove_header_menu.isSelected()
+
+        self.callbacks.saveExtensionSetting(SETTING_ENABLED, str(self.enabled))
+        self.callbacks.saveExtensionSetting(SETTING_REMOVE_HEADER, str(self.remove_header))
+        debug("Settings saved")
+
         
