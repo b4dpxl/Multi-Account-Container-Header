@@ -25,3 +25,5 @@ The valid colours are:
 - yellow
 
 If there is no mapping or match, it won't highight. But it will add a comment with the container name either way.
+
+There's also an option "Remove Header" which will create an Edited Request with the header removed.
