@@ -114,7 +114,7 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
         request = self.helpers.analyzeRequest(message.getMessageInfo())
         headers = request.getHeaders()
         for header in headers:
-            if header.startswith("X-CONTAINER-ID:"):
+            if header.upper().startswith("X-CONTAINER-ID:"):
 
                 value = header.split(':', 1)[1].strip()
 
@@ -140,6 +140,7 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
 
         if highlight_colour:
             message.getMessageInfo().setHighlight(highlight_colour)
+            debug("Adding highlight: " + highlight_colour)
 
         if new_comment:
             comment = message.getMessageInfo().getComment()
@@ -148,7 +149,7 @@ class BurpExtender(IBurpExtender, IProxyListener, IContextMenuFactory, IExtensio
             message.getMessageInfo().setComment(new_comment)
 
         if self.remove_header:
-            debug("Removing header")
+            # debug("Removing header")
             message.getMessageInfo().setRequest(self.helpers.buildHttpMessage(
                 headers, 
                 message.getMessageInfo().request[request.getBodyOffset():]
